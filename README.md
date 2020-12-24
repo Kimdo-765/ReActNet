@@ -22,33 +22,17 @@ If you find our code useful for your research, please consider citing:
 ## Run
 
 ### 1. Requirements:
-* python3, pytorch 1.4.0, torchvision 0.5.0
+* python3.8 >, pytorch 1.4.0 >, torchvision 0.5.0 >
     
 ### 2. Data:
-* Download ImageNet dataset
+* Trained Model is Here
+* https://drive.google.com/drive/folders/1hJqI-DHfcaL6B12hsf6-GOcKZYZI2ADT?usp=sharing
 
 ### 3. Steps to run:
 (1) Step1:  binarizing activations
-* Change directory to `./resnet/1_step1/` or `./mobilenet/1_step1/`
+* Change directory to `./mobilenet/1_step1/` or `./mobilenetv2/1_step1/`
 * run `bash run.sh`
 
 (2) Step2:  binarizing weights + activations
-* Change directory to `./resnet/2_step2/` or `./mobilenet/2_step2/`
+* Change directory to `./mobilenet/2_step2/` or `./mobilenetv2/2_step2/`
 * run `bash run.sh`
-       
-
-## Models
-
-| Methods | Top1-Acc | FLOPs | Trained Model |
-| --- | --- | --- | --- | 
-| XNOR-Net | 51.2% | 1.67 x 10^8 | - |
-| Bi-Real Net| 56.4% | 1.63 x 10^8 | - | 
-| Real-to-Binary| 65.4% | 1.83 x 10^8 | - |
-| ReActNet (Bi-Real based) | 65.9% | 1.63 x 10^8 | [Model-ReAct-ResNet](https://hkustconnect-my.sharepoint.com/:u:/g/personal/zliubq_connect_ust_hk/EYtZHpouJiVKtfFvl_p9ouUBISwzEuupnqHwJDEPQHWpwA?e=8i22J8) |
-| ReActNet-A | 69.5% | 0.87 x 10^8 | [Model-ReAct-MobileNet](https://hkustconnect-my.sharepoint.com/:u:/g/personal/zliubq_connect_ust_hk/EdaAeiqveCtPt3ElnaY4JJgBsaScj5snGkxIuJhuIPd25A?e=sqg1b6) |
-
-## Contact
-
-Zechun Liu, HKUST (zliubq at connect.ust.hk)
-
-Zhiqiang Shen, CMU (zhiqians at andrew.cmu.edu) 

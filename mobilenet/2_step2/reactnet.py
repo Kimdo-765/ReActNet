@@ -81,7 +81,6 @@ class HardBinaryConv(nn.Module):
         binary_weights_no_grad = scaling_factor * torch.sign(real_weights)
         cliped_weights = torch.clamp(real_weights, -1.0, 1.0)
         binary_weights = binary_weights_no_grad.detach() - cliped_weights.detach() + cliped_weights
-        #print(binary_weights, flush=True)
         y = F.conv2d(x, binary_weights, stride=self.stride, padding=self.padding)
 
         return y
@@ -166,12 +165,12 @@ class BasicBlock(nn.Module):
 
 
 class reactnet(nn.Module):
-    def __init__(self, num_classes=1000):
+    def __init__(self, num_classes=10):
         super(reactnet, self).__init__()
         self.feature = nn.ModuleList()
         for i in range(len(stage_out_channel)):
             if i == 0:
-                self.feature.append(firstconv3x3(3, stage_out_channel[i], 2))
+                self.feature.append(firstconv3x3(3, stage_out_channel[i], 1))
             elif stage_out_channel[i-1] != stage_out_channel[i] and stage_out_channel[i] != 64:
                 self.feature.append(BasicBlock(stage_out_channel[i-1], stage_out_channel[i], 2))
             else:

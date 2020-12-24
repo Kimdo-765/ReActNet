@@ -12,6 +12,8 @@ import torch.utils
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.utils.data.distributed
+from warmup_scheduler import GradualWarmupScheduler
+from cifar10_models import resnet34
 
 sys.path.append("../../")
 from utils.utils import *
@@ -21,28 +23,28 @@ from torch.autograd import Variable
 from reactnet import reactnet
 import torchvision.models as models
 
+
 parser = argparse.ArgumentParser("birealnet18")
-parser.add_argument('--batch_size', type=int, default=512, help='batch size')
-parser.add_argument('--epochs', type=int, default=256, help='num of training epochs')
-parser.add_argument('--learning_rate', type=float, default=0.001, help='init learning rate')
+parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
+parser.add_argument('--epochs', type=int, default=512, help='num of training epochs')
+parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
-parser.add_argument('--weight_decay', type=float, default=0, help='weight decay')
+parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
 parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
-parser.add_argument('--data', metavar='DIR', help='path to dataset')
 parser.add_argument('--label_smooth', type=float, default=0.1, help='label smoothing')
 parser.add_argument('--teacher', type=str, default='resnet34', help='path of ImageNet')
-parser.add_argument('-j', '--workers', default=40, type=int, metavar='N',
-                    help='number of data loading workers (default: 4)')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+        help='number of data loading workers (default: 4)')
 args = parser.parse_args()
 
-CLASSES = 1000
+CLASSES = 10
 
 if not os.path.exists('log'):
     os.mkdir('log')
 
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-    format=log_format, datefmt='%m/%d %I:%M:%S %p')
+        format=log_format, datefmt='%m/%d %I:%M:%S %p')
 fh = logging.FileHandler(os.path.join('log/log.txt'))
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
@@ -53,11 +55,11 @@ def main():
     start_t = time.time()
 
     cudnn.benchmark = True
-    cudnn.enabled=True
+    cudnn.enabled = True
     logging.info("args = %s", args)
 
     # load model
-    model_teacher = models.__dict__[args.teacher](pretrained=True)
+    model_teacher = resnet34(pretrained=True)
     model_teacher = nn.DataParallel(model_teacher).cuda()
     for p in model_teacher.parameters():
         p.requires_grad = False
@@ -84,10 +86,10 @@ def main():
 
     optimizer = torch.optim.Adam(
             [{'params' : other_parameters},
-            {'params' : weight_parameters, 'weight_decay' : args.weight_decay}],
+                {'params' : weight_parameters, 'weight_decay' : args.weight_decay}],
             lr=args.learning_rate,)
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step : (1.0-step/args.epochs), last_epoch=-1)
+    scheduler_steplr = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = args.epochs-(args.epochs/10))
+    scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=args.epochs/10,after_scheduler=scheduler_steplr)
     start_epoch = 0
     best_top1_acc= 0
 
@@ -105,50 +107,58 @@ def main():
         scheduler.step()
 
     # load training data
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    #traindir = os.path.join(args.data, 'train')
+    #valdir = os.path.join(args.data, 'val')
+    normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+            std=[0.2023, 0.1994, 0.2010])
 
     # data augmentation
-    crop_scale = 0.08
-    lighting_param = 0.1
     train_transforms = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(crop_scale, 1.0)),
-        Lighting(lighting_param),
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomRotation(5),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        normalize])
+        normalize,
+        ])
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transform=train_transforms)
+    val_transforms = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+        ])
+
+    train_dataset = datasets.CIFAR10(root='.',
+            train=True,
+            download=True,
+            transform=train_transforms
+            )
+    val_dataset = datasets.CIFAR10(root='.',
+            train=False,
+            download=True,
+            transform=val_transforms
+            )
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
+            train_dataset, batch_size=args.batch_size, shuffle=True,
+            num_workers=args.workers, pin_memory=True, drop_last=True)
 
     # load validation data
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+            val_dataset,
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True, drop_last=True)
 
     # train the model
     epoch = start_epoch
     while epoch < args.epochs:
-        train_obj, train_top1_acc,  train_top5_acc = train(epoch,  train_loader, model_student, model_teacher, criterion_kd, optimizer, scheduler)
-        valid_obj, valid_top1_acc, valid_top5_acc = validate(epoch, val_loader, model_student, criterion, args)
+        train_obj, train_top1_acc = train(epoch,  train_loader, model_student, model_teacher, criterion_kd, optimizer, scheduler)
+        valid_obj, valid_top1_acc = validate(epoch, val_loader, model_student, criterion, args)
 
         is_best = False
         if valid_top1_acc > best_top1_acc:
             best_top1_acc = valid_top1_acc
             is_best = True
+
+        print(' * acc loss : {accuracy_loss:.3f}'.format(accuracy_loss = train_top1_acc - valid_top1_acc))
 
         save_checkpoint({
             'epoch': epoch,
@@ -168,17 +178,15 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
 
     progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+            len(train_loader),
+            [batch_time, data_time, losses, top1],
+            prefix="Epoch: [{}]".format(epoch))
 
     model_student.train()
     model_teacher.eval()
     end = time.time()
-    scheduler.step()
 
     for param_group in optimizer.param_groups:
         cur_lr = param_group['lr']
@@ -189,17 +197,16 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
         images = images.cuda()
         target = target.cuda()
 
-        # compute outputy
+        # compute output
         logits_student = model_student(images)
         logits_teacher = model_teacher(images)
         loss = criterion(logits_student, logits_teacher)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(logits_student, target, topk=(1, 5))
+        prec1 = accuracy(logits_student, target, topk=(1,))
         n = images.size(0)
         losses.update(loss.item(), n)   #accumulated loss
-        top1.update(prec1.item(), n)
-        top5.update(prec5.item(), n)
+        top1.update(prec1[0].item(), n)
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -212,19 +219,22 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
 
         progress.display(i)
 
-    return losses.avg, top1.avg, top5.avg
+    scheduler.step()
+
+    return losses.avg, top1.avg
 
 def validate(epoch, val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, losses, top1, top5],
-        prefix='Test: ')
+            len(val_loader),
+            [batch_time, losses, top1],
+            prefix='Test: ')
 
     # switch to evaluation mode
+    correct = 0
+    total = 0
     model.eval()
     with torch.no_grad():
         end = time.time()
@@ -237,22 +247,24 @@ def validate(epoch, val_loader, model, criterion, args):
             loss = criterion(logits, target)
 
             # measure accuracy and record loss
-            pred1, pred5 = accuracy(logits, target, topk=(1, 5))
+            pred1= accuracy(logits, target, topk=(1,))
             n = images.size(0)
             losses.update(loss.item(), n)
-            top1.update(pred1[0], n)
-            top5.update(pred5[0], n)
+            top1.update(pred1[0].item(), n)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
+            _, predicted = logits.max(1)
+            total += target.size(0)
+            correct += predicted.eq(target).sum().item()
 
             progress.display(i)
 
-        print(' * acc@1 {top1.avg:.3f} acc@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
+        acc = 100.*correct/total
+        print(' * acc@1 {acc:.3f}'.format(acc=acc))
 
-    return losses.avg, top1.avg, top5.avg
+        return losses.avg, top1.avg
 
 
 if __name__ == '__main__':
